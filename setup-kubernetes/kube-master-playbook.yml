@@ -1,0 +1,270 @@
+---
+- hosts: all
+  become: true
+  tasks:
+  # Installing Dependencies.
+  - name: Install packages that allow apt to be used over HTTPS
+    apt:
+      name: "{{ packages }}"
+      state: present
+      update_cache: yes
+    vars:
+      packages:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg-agent
+      - software-properties-common
+
+# Adding docker repo.
+
+  - name: Add an apt signing key for Docker
+    apt_key:
+      url: https://download.docker.com/linux/ubuntu/gpg
+      state: present
+
+  - name: Add apt repository for stable version
+    apt_repository:
+      repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu xenial stable
+      state: present
+
+# Intalling Docker.
+  - name: Install docker and its dependecies
+    apt: 
+      name: "{{ packages }}"
+      state: present
+      update_cache: yes
+    vars:
+      packages:
+      - docker-ce 
+      - docker-ce-cli 
+      - containerd.io
+    notify:
+      - docker status
+
+  - name: Add vagrant user to docker group
+    user:
+      name: vagrant
+      group: docker
+
+# Removing Swap.
+  - name: Remove swapfile from /etc/fstab
+    mount:
+      name: "{{ item }}"
+      fstype: swap
+      state: absent
+    with_items:
+      - swap
+      - none
+
+  - name: Disable swap
+    command: swapoff -a
+    when: ansible_swaptotal_mb > 0
+
+# Installing Kubelet, Kubeadm and kubectl
+
+
+# Adding k8s repository
+  - name: Add an apt signing key for Kubernetes
+    apt_key:
+      url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+      state: present
+
+  - name: Adding apt repository for Kubernetes
+    apt_repository:
+      repo: deb https://apt.kubernetes.io/ kubernetes-xenial main
+      state: present
+      filename: kubernetes.list
+
+  - name: Install Kubernetes binaries
+    apt: 
+      name: "{{ packages }}"
+      state: present
+      update_cache: yes
+    vars:
+      packages:
+        - kubelet 
+        - kubeadm 
+        - kubectl
+        - jq
+
+  - name: Configure node ip
+    lineinfile:
+      path: /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+      line: KUBELET_EXTRA_ARGS=--node-ip={{ node_ip }}
+      insertafter: "# the .NodeRegistration.KubeletExtraArgs"
+
+  - name: Restart kubelet
+    service:
+      name: kubelet
+      daemon_reload: yes
+      state: restarted
+
+# Initializing k8s with kubeadm.
+
+  - name: Initialize the Kubernetes cluster using kubeadm
+    command: kubeadm init --apiserver-advertise-address="192.168.50.10" --apiserver-cert-extra-sans="192.168.50.10"  --node-name k8s-master --pod-network-cidr=192.168.0.0/16
+
+# Setting kubeconfig for user Vagrant.
+
+  - name: Setup kubeconfig for vagrant user
+    command: "{{ item }}"
+    with_items:
+     - mkdir -p /home/vagrant/.kube
+     - cp -i /etc/kubernetes/admin.conf /home/vagrant/.kube/config
+     - chown vagrant:vagrant /home/vagrant/.kube/config
+
+# Setting Network provider and Network policy using calico.
+
+  - name: Install calico pod network
+    become: false
+    command: kubectl create -f https://docs.projectcalico.org/v3.7/manifests/calico.yaml
+
+
+# Installing the dasboard.
+  - name: Installing dashboard.
+    become: false
+    command: kubectl create -f https://raw.githubusercontent.com/kubernetes/dashboard/v1.10.1/src/deploy/recommended/kubernetes-dashboard.yaml
+
+# Generate join command, and save to file.
+
+  - name: Generate join command
+    command: kubeadm token create --print-join-command
+    register: join_command
+
+  - name: Copy join command to local file
+    become: false
+    local_action: copy content="{{ join_command.stdout_lines[0] }}" dest="./join-command"
+
+
+  - name: Copy cluster config to local.
+    command: cp -fr /home/vagrant/.kube/config /vagrant/files/
+
+# Installing helm.
+  - name: Downloading helm.
+    get_url: 
+      url: https://git.io/get_helm.sh
+      dest: /tmp/get_helm.sh
+      mode: 777
+  
+  - name: Installing Helm Kubernetes packages manager.
+    become: yes
+    command: bash /tmp/get_helm.sh
+
+
+
+# Having Issue while running multiple vms.
+# I had to unable the master to run pods.
+# Using this command below we can allow this.
+# Not to be done on production.
+  - name: Allow Master to run pods.
+    become: false
+    command: kubectl taint nodes --all node-role.kubernetes.io/master-
+
+# Then we run helm init.
+  - name: Instanstiating Helm package manager.
+    become: false
+    command: helm init
+
+# Fixing issue with configmap permision helm.
+  - name: Fixing helm configmap permission.
+    become: false
+    command: "{{ item }}"
+    with_items:
+      - kubectl create serviceaccount --namespace kube-system tiller
+      - kubectl create clusterrolebinding tiller-cluster-rule --clusterrole=cluster-admin --serviceaccount=kube-system:tiller
+      - kubectl patch deploy --namespace kube-system tiller-deploy -p '{"spec":{"template":{"spec":{"serviceAccount":"tiller"}}}}'      
+      - helm init --service-account tiller --upgrade
+      - helm init
+    ignore_errors: True
+
+# Check if  tiller is started..
+  - pause:
+      minutes: 5
+
+# Update Help repo
+  - name: Update Helm repo.
+    become: false
+    command: helm repo update
+
+# Then we deploy the ingress controller so we can access the dashboard outside our cluster.
+  - name: Installing ingress controller
+    become: false
+    command: helm install stable/nginx-ingress 
+
+
+# Change the Dashboard from Cluster Ip to NodePort.
+  - name: Switch from ClusterIp to NodePort for the dashboard and Fix dashboard permision.
+    become: false
+    command: "{{ item }}"
+    with_items: 
+      - kubectl -n kube-system  patch svc kubernetes-dashboard --type='json' -p '[{"op":"replace","path":"/spec/type","value":"NodePort"}]'
+      - kubectl create clusterrolebinding kubernetes-dashboard -n kube-system --clusterrole=cluster-admin --serviceaccount=kube-system:kubernetes-dashboard
+      
+
+# Creating the deployment namespace on the cluster.
+  - name: Creating deployment namespace.
+    become: false
+    command: "{{ item }}"
+    with_items:
+      - kubectl apply -f /vagrant/deployment/namespace.yml
+      - kubectl -n deployment apply -f https://raw.githubusercontent.com/kubernetes/examples/master/guestbook/all-in-one/guestbook-all-in-one.yaml
+      - kubectl -n deployment  patch svc frontend --type='json' -p '[{"op":"replace","path":"/spec/type","value":"NodePort"}]'
+      
+
+  # Create monitoring namespace.
+  - name: Create monitoring namespace.
+    become: false
+    command: kubectl apply -f /vagrant/monitoring/namespace.yml
+
+# Installing prometheus monitoring tools Using Helm.
+
+  - name: Install prometheus
+    become: false
+    command: helm install  stable/prometheus --namespace monitoring --name prometheus \
+      --set rbac.create=true \
+      --set server.persistentVolume.enabled=false \
+      --set alertmanager.persistentVolume.enabled=false 
+
+
+
+# Installing grafana Dash board Using Helm.
+
+  - name: Install Grafana
+    become: false
+    command: helm install   stable/grafana --namespace monitoring --name grafana \
+      --set rbac.create=true \
+      --set server.persistentVolume.enabled=false \
+      --set alertmanager.persistentVolume.enabled=false \
+      --set service.type=NodePort
+
+
+# Check it grafana is started..
+  - name: Wait for grafana pods become ready
+    become: false
+    command: kubectl wait --namespace=monitoring --for=condition=Ready pods --selector app=grafana --timeout=700s
+    register: grafana_pods_ready
+
+  - debug: var=grafana_pods_ready.stdout_lines
+
+
+# Create monitoring namespace.
+  - name: Create  logging namespace.
+    become: false
+    command: kubectl apply -f /vagrant/logging_efk/namespace.yml
+
+
+
+# Get information on the Dashboard URL, Token and grafana URL, password
+
+  - name: Gathering all the informations Needed.
+    become: false
+    command: bash  /vagrant/Gather_informations.sh 
+
+
+
+# Restarting Docker service.
+
+  handlers:
+    - name: docker status
+      service: name=docker state=started

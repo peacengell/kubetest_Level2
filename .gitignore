@@ -1,0 +1,4 @@
+setup-jenkins/jenkins-playbook.retry
+*.txt
+.vagrant/*
+setup-kubernetes/kube-master-playbook.retry
