@@ -76,15 +76,15 @@ After running Vagrant up.
 
 ### When it's finishes you should have these txt files created like below.
 
---├── dashboard_url.txt               # Contains the dashbord url  [ IP:PORT]
---├── dash_secret_token.txt           # Contains  the token to login.
---├── grafana_pass.txt                # Contains Grafana Password.
---├── grafana_url.txt                 # Contains Grafana url [ IP:PORT ]
---├── jenkins_pass.txt                # Contains Jenkins password.
---├── jenkins_url.txt                 # Contains Jenkins url [ IP:PORT ]
---├── kibana_url.txt                  # Contains Kibana url [ IP:PORT ]
---├── prometheus_data_source.txt      # Contains data url [ IP:PORT ]
---├── guestbook_url.txt               # Contains guestbook url [ IP:PORT ]
+- ├── dashboard_url.txt               # Contains the dashbord url  [ IP:PORT]
+- ├── dash_secret_token.txt           # Contains  the token to login.
+- ├── grafana_pass.txt                # Contains Grafana Password.
+- ├── grafana_url.txt                 # Contains Grafana url [ IP:PORT ]
+- ├── jenkins_pass.txt                # Contains Jenkins password.
+- ├── jenkins_url.txt                 # Contains Jenkins url [ IP:PORT ]
+- ├── kibana_url.txt                  # Contains Kibana url [ IP:PORT ]
+- ├── prometheus_data_source.txt      # Contains data url [ IP:PORT ]
+- ├── guestbook_url.txt               # Contains guestbook url [ IP:PORT ]
 
 ### Dependencies needed for jenkins Cloudbees build and publish plugin is needed.
 
